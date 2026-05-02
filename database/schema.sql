@@ -70,3 +70,34 @@ CREATE TABLE IF NOT EXISTS weather_readings (
     -- Critical constraint as requested in the analysis
     UNIQUE(location_id, observation_timestamp)
 );
+-- ============================================
+-- Indexes for Performance Optimization
+-- ============================================
+
+-- Index 1: Most common query - get latest readings for a specific location
+-- Used in: Dashboard "current weather per city"
+CREATE INDEX IF NOT EXISTS idx_weather_location_time
+    ON weather_readings(location_id, observation_timestamp DESC);
+
+-- Index 2: Time-based queries (charts, trends over time)
+-- Used in: Dashboard "temperature trends"
+CREATE INDEX IF NOT EXISTS idx_weather_observation_time
+    ON weather_readings(observation_timestamp DESC);
+
+-- Index 3: Join with pipeline_runs for monitoring
+-- Used in: "which readings came from which run"
+CREATE INDEX IF NOT EXISTS idx_weather_pipeline_run
+    ON weather_readings(pipeline_run_id);
+
+-- Index 4: Pipeline monitoring queries
+-- Used in: Dashboard "pipeline health monitoring"
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_status_time
+    ON pipeline_runs(status, started_at DESC);
+
+-- Index 5: Recent pipeline runs (for dashboard)
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_started
+    ON pipeline_runs(started_at DESC);
+
+-- Index 6: Search locations by city (autocomplete in dashboard)
+CREATE INDEX IF NOT EXISTS idx_locations_city
+    ON locations(city);

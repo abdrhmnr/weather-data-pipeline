@@ -39,10 +39,10 @@ def get_current_weather(city):
         response = session.get(API_BASE_URL, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
-        
+
         return {
             'city': data.get('name'),
-            'country': data.get('sys', {}).get('country'),
+            'country': (data.get('sys', {}).get('country') or '').strip().rstrip('.').upper(),
             'lat': data.get('coord', {}).get('lat'),
             'lon': data.get('coord', {}).get('lon'),
             'timezone': data.get('timezone'),
@@ -62,5 +62,5 @@ def get_current_weather(city):
         logger.warning(f"HTTP error for {city}: {e.response.status_code} - {e.response.text}")
     except Exception as e:
         logger.error(f"Unexpected error fetching weather for {city}: {e}")
-    
+
     return None
