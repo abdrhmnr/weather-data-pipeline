@@ -9,8 +9,6 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
-
   pipeline:
     build: .
     environment:
@@ -25,6 +23,22 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./assets:/app/assets
+
+  dashboard:
+    build: .
+    command: streamlit run src/dashboard/app.py --server.port=8501 --server.address=0.0.0.0
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=weather_db
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres_password
+    ports:
+      - "8501:8501"
+    depends_on:
+      - db
+    volumes:
+      - .:/app
 
 volumes:
   postgres_data:

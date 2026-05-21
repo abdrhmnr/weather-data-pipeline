@@ -1,11 +1,11 @@
 import os
 import json
 import logging
-import pandas as pd
 from src.extract import get_current_weather
 from src.transform import WeatherTransformer
 from src.load import WeatherLoader
-from config.settings import TARGET_CITIES, WEATHER_CSV_PATH, THRESHOLDS
+from src.database.session import get_db
+from config.settings import TARGET_CITIES, THRESHOLDS
 
 # Setup logging
 logging.basicConfig(
@@ -28,74 +28,73 @@ def validate_data(data):
 
 def run_pipeline():
     logger.info("Initializing Weather Data Pipeline...")
-    loader = WeatherLoader()
     transformer = WeatherTransformer()
-
-    # 1. Start pipeline run tracking
-    run_id = loader.start_pipeline_run(params=json.dumps({"cities": TARGET_CITIES}))
 
     extracted_count = 0
     loaded_count = 0
     rejected_count = 0
+    run_id = None
 
-    try:
-        # 2. Train transformer with historical data if available
-        if os.path.exists(WEATHER_CSV_PATH):
-            logger.info(f"Loading historical data from {WEATHER_CSV_PATH}")
-            historical_df = pd.read_csv(WEATHER_CSV_PATH)
-            transformer.train_models(historical_df)
-        else:
-            logger.warning("Historical data not found. Predictions will be disabled.")
+    with get_db() as db_session:
+        loader = WeatherLoader(db_session)
+        
+        # 1. Start pipeline run tracking
+        run_id = loader.start_pipeline_run(params=json.dumps({"cities": TARGET_CITIES}))
+        
+        if not run_id:
+            logger.error("Could not start pipeline run. Exiting.")
+            return
 
-        for city in TARGET_CITIES:
-            # 3. Extract
-            raw_data = get_current_weather(city)
-            if not raw_data:
-                rejected_count += 1
-                continue
-
-            extracted_count += 1
-
-            # 4. Transform
-            transformed_data = transformer.transform_reading(raw_data)
-
-            # 5. Data Validation (Quality Check)
-            if not validate_data(transformed_data):
-                rejected_count += 1
-                continue
-
-            # 6. Load
-            try:
-                # First upsert location
-                location_id = loader.upsert_location(
-                    city=transformed_data['city'],
-                    country=transformed_data['country'],
-                    lat=transformed_data['lat'],
-                    lon=transformed_data['lon'],
-                    timezone=str(transformed_data['timezone'])
-                )
-
-                # Then load reading
-                success = loader.load_reading(transformed_data, location_id, run_id)
-                if success:
-                    loaded_count += 1
-                else:
+        try:
+            for city in TARGET_CITIES:
+                # 3. Extract
+                raw_data = get_current_weather(city)
+                if not raw_data:
                     rejected_count += 1
-            except Exception as e:
-                logger.error(f"Failed to process city {city}: {e}")
-                rejected_count += 1
+                    continue
 
-        # 7. Finish pipeline run
-        status = 'SUCCESS' if rejected_count == 0 else 'PARTIAL'
-        #status = 'SUCCESS' if rejected_count == 0 else 'PARTIAL_SUCCESS'
-        if extracted_count == 0: status = 'FAILED'
+                extracted_count += 1
 
-        loader.close_pipeline_run(run_id, status, extracted_count, loaded_count, rejected_count)
-        logger.info(f"Pipeline finished. Status: {status}. Loaded: {loaded_count}, Rejected: {rejected_count}")
+                # 4. Transform
+                transformed_data = transformer.transform_reading(raw_data)
 
-    except Exception as e:
-        logger.error(f"Pipeline critical failure: {e}")
-        loader.close_pipeline_run(run_id, 'FAILED', extracted_count, loaded_count, rejected_count, error=str(e))
+                # 5. Data Validation (Quality Check)
+                if not validate_data(transformed_data):
+                    rejected_count += 1
+                    continue
+
+                # 6. Load
+                try:
+                    # First upsert location
+                    location_id = loader.upsert_location(
+                        city=transformed_data['city'],
+                        country=transformed_data['country'],
+                        lat=transformed_data['lat'],
+                        lon=transformed_data['lon'],
+                        timezone_str=str(transformed_data['timezone'])
+                    )
+
+                    # Then load reading
+                    success = loader.load_reading(transformed_data, location_id, run_id)
+                    if success:
+                        loaded_count += 1
+                    else:
+                        rejected_count += 1
+                except Exception as e:
+                    logger.error(f"Failed to process city {city}: {e}")
+                    rejected_count += 1
+
+            # 7. Finish pipeline run
+            status = 'SUCCESS' if rejected_count == 0 else 'PARTIAL'
+            if extracted_count == 0: status = 'FAILED'
+
+            loader.close_pipeline_run(run_id, status, extracted_count, loaded_count, rejected_count)
+            logger.info(f"Pipeline finished. Status: {status}. Loaded: {loaded_count}, Rejected: {rejected_count}")
+
+        except Exception as e:
+            logger.error(f"Pipeline critical failure: {e}")
+            if run_id:
+                loader.close_pipeline_run(run_id, 'FAILED', extracted_count, loaded_count, rejected_count, error=str(e))
 
 if __name__ == "__main__":
     run_pipeline()

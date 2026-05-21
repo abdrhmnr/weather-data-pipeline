@@ -56,7 +56,7 @@ def get_current_weather(city):
             'wind_gust_ms': data.get('wind', {}).get('gust', 0),
             'description': data.get('weather', [{}])[0].get('description'),
             'precipitation_mm': data.get('rain', {}).get('1h', 0) or data.get('snow', {}).get('1h', 0) or 0,
-            'observation_timestamp': datetime.now(pytz.utc).replace(minute=0, second=0, microsecond=0)
+            'observation_timestamp': datetime.fromtimestamp(data.get('dt', datetime.now().timestamp()), tz=pytz.utc)
         }
     except requests.exceptions.HTTPError as e:
         logger.warning(f"HTTP error for {city}: {e.response.status_code} - {e.response.text}")

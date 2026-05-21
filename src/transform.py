@@ -1,44 +1,61 @@
+import os
+import joblib
 import pandas as pd
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import LabelEncoder
+import logging
+
+logger = logging.getLogger(__name__)
 
 class WeatherTransformer:
     def __init__(self):
+        # Import config here to avoid circular imports if any, or just import at top.
+        from config.settings import ASSETS_DIR
+        
+        model_path = os.path.join(ASSETS_DIR, 'rain_model.pkl')
+        encoder_path = os.path.join(ASSETS_DIR, 'label_encoder.pkl')
+        
         self.rain_model = None
-        self.label_encoder = LabelEncoder()
-
-    def train_models(self, historical_df):
-        """
-        Trains the models using historical data.
-        """
-        df = historical_df.copy()
-        df = df.dropna().drop_duplicates()
-
-        # Prepare label encoder for wind direction
-        df['WindGustDir'] = self.label_encoder.fit_transform(df['WindGustDir'].astype(str))
-
-        # Prepare features for rain prediction
-        # Based on notebook mapping: MinTemp, MaxTemp, Humidity, WindGustDir, WindGustSpeed, Pressure, Temp
-        X = df[['MinTemp', 'MaxTemp', 'Humidity', 'WindGustDir', 'WindGustSpeed', 'Pressure', 'Temp']]
-        y = df['RainTomorrow'].apply(lambda x: 1 if x == 'Yes' or x is True or x == 1 else 0)
-
-        self.rain_model = RandomForestClassifier(n_estimators=100, random_state=42)
-        self.rain_model.fit(X, y)
-        print("Models trained successfully!")
+        self.label_encoder = None
+        
+        if os.path.exists(model_path) and os.path.exists(encoder_path):
+            try:
+                self.rain_model = joblib.load(model_path)
+                self.label_encoder = joblib.load(encoder_path)
+                logger.info("Loaded pre-trained ML models successfully.")
+            except Exception as e:
+                logger.error(f"Failed to load ML models: {e}")
+        else:
+            logger.warning("Pre-trained ML models not found. Rain prediction will be disabled. Run scripts/train_model.py first.")
 
     def transform_reading(self, raw_data):
         """
-        Transforms raw API data to match schema requirements.
+        Transforms and cleans raw API data to match schema requirements.
         """
         transformed = raw_data.copy()
 
-        # 1. Unit conversions: m/s to km/h (Multiply by 3.6)
-        transformed['wind_speed_kmh'] = round(raw_data['wind_speed_ms'] * 3.6, 2)
-        transformed['wind_gust_kmh'] = round(raw_data['wind_gust_ms'] * 3.6, 2)
+        # --- 1. DATA CLEANING ---
+        # Handle Nulls for numeric fields
+        numeric_fields = ['wind_speed_ms', 'wind_gust_ms', 'wind_deg', 'temp_avg_c', 'temp_min_c', 'temp_max_c', 'humidity_pct', 'pressure_hpa', 'precipitation_mm']
+        for field in numeric_fields:
+            if transformed.get(field) is None:
+                transformed[field] = 0.0
 
-        # 2. Wind direction string mapping (16-point)
-        deg = raw_data['wind_deg'] % 360
+        # String formatting
+        if 'description' in transformed and isinstance(transformed['description'], str):
+            transformed['description'] = transformed['description'].strip().lower()
+            
+        # Validation / Bounds Checking for temperature
+        if not (-60 <= transformed['temp_avg_c'] <= 60):
+            logger.warning(f"Abnormal temperature detected: {transformed['temp_avg_c']}. Clamping to realistic bounds.")
+            transformed['temp_avg_c'] = max(-60, min(transformed['temp_avg_c'], 60))
+
+        # --- 2. DATA TRANSFORMATION ---
+        # Unit conversions: m/s to km/h (Multiply by 3.6)
+        transformed['wind_speed_kmh'] = round(transformed['wind_speed_ms'] * 3.6, 2)
+        transformed['wind_gust_kmh'] = round(transformed['wind_gust_ms'] * 3.6, 2)
+
+        # Wind direction string mapping (16-point)
+        deg = transformed['wind_deg'] % 360
         compass_points = [
             ("N", 348.75, 360), ("N", 0, 11.25),
             ("NNE", 11.25, 33.75), ("NE", 33.75, 56.25),
@@ -59,23 +76,23 @@ class WeatherTransformer:
         transformed['wind_direction'] = wind_direction
         transformed['wind_direction_deg'] = int(deg)
 
-        # 3. Predict Rain Tomorrow (Fit to schema: BOOLEAN)
+        # --- 3. ML PREDICTION ---
+        # Predict Rain Tomorrow (Fit to schema: BOOLEAN)
         if self.rain_model:
             # Prepare feature vector for prediction
-            # We need to encode the current wind direction using the same encoder
             if wind_direction in self.label_encoder.classes_:
                 wind_dir_encoded = self.label_encoder.transform([wind_direction])[0]
             else:
                 wind_dir_encoded = 0
 
             features = pd.DataFrame([{
-                'MinTemp': raw_data['temp_min_c'],
-                'MaxTemp': raw_data['temp_max_c'],
-                'Humidity': raw_data['humidity_pct'],
+                'MinTemp': transformed['temp_min_c'],
+                'MaxTemp': transformed['temp_max_c'],
+                'Humidity': transformed['humidity_pct'],
                 'WindGustDir': wind_dir_encoded,
-                'WindGustSpeed': raw_data['wind_gust_ms'], # Model was trained with m/s? Checking notebook...
-                'Pressure': raw_data['pressure_hpa'],
-                'Temp': raw_data['temp_avg_c']
+                'WindGustSpeed': transformed['wind_gust_ms'],
+                'Pressure': transformed['pressure_hpa'],
+                'Temp': transformed['temp_avg_c']
             }])
 
             # Use same order as training
