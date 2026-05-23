@@ -10,7 +10,8 @@ logging.basicConfig(
     handlers=[
         logging.FileHandler("logs/scheduler.log"),
         logging.StreamHandler()
-    ]
+    ],
+    force=True
 )
 
 def job():
