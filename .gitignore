@@ -14,4 +14,4 @@ logs/*.log
 .DS_Store
 Thumbs.db
 *.log
-reports/*.csv
+reports/*.csvbackups/
